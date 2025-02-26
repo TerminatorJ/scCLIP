@@ -1,4 +1,8 @@
 # scCLIP
 single-cell CLIP model
 
-single-cell
+
+
+# Updates
+
+2025/2/26 JunWang upload the codes of all available packages for sequence generation
