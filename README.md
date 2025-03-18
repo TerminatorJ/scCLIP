@@ -38,5 +38,5 @@ pip install flash-attn
 
 # Updates
 
-2025/2/26 JunWang upload the codes of all available packages for sequence generation
+2025/2/26 JunWang upload the codes of all available packages for sequence generation  
 2025/3/18 JunWang upload the data preprocessing and model architecture to the repository
