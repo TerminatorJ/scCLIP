@@ -1,0 +1,8 @@
+#the source data
+./data
+
+*/*.png
+*.png
+
+dataset/
+
