@@ -4,9 +4,9 @@ import torch.nn.functional as F
 import math
 import os
 from pathlib import Path
-from scCLIP.model.submodules import Conv1DBlock,  AltBlock, get_alibi, MaskedConv2d, MoE, PjBlock
-from torchviz import make_dot
-from torchsummary import summary
+from scCLIP.model.submodules import Conv1DBlock,  AltBlock, MaskedConv2d, MoE, PjBlock
+from scCLIP.model.settings import Settings
+
 
 class SqueezeformerBlock(nn.Module):
     def __init__(self,
@@ -26,6 +26,8 @@ class SqueezeformerBlock(nn.Module):
                  activation='swish',
                  prenorm=True,
                  cov=True,
+                 use_flash_attn=False,
+                 use_alibi=True,
                  moe=True, 
                  dropout=0.1,
                  noisy_gating=True, 
@@ -41,15 +43,15 @@ class SqueezeformerBlock(nn.Module):
         self.moe = moe
         self.cov = cov
         self.conv_blocks = nn.ModuleList([Conv1DBlock(dim,kernel_size,groups,1,1,conv_dropout,mlp_dropout,drop_path,conv_expand,activation,prenorm) for _ in range(num_conv_block)])
-        self.attn_blocks = nn.ModuleList([AltBlock(dim,num_heads,attn_expand,attn_dropout,mlp_dropout,drop_path,activation,prenorm,moe,dropout,noisy_gating,num_experts,moe_input_size,moe_output_size,moe_hidden_size,moe_k) for _ in range(num_attn_block)])
+        self.attn_blocks = nn.ModuleList([AltBlock(dim,num_heads,attn_expand,attn_dropout,mlp_dropout,drop_path,activation,prenorm,moe,use_flash_attn,use_alibi,dropout,noisy_gating,num_experts,moe_input_size,moe_output_size,moe_hidden_size,moe_k) for _ in range(num_attn_block)])
 
-    def forward(self, inputs, mask=None, alibi_bias=None):
+    def forward(self, inputs, mask=None):
         x = inputs #(B,N,C)
         for block in self.attn_blocks:
             if self.moe:
-                x, loss = block(x, mask=mask, alibi_bias=alibi_bias)
+                x, loss = block(x, mask=mask)
             else:
-                x = block(x, mask=mask, alibi_bias=alibi_bias)
+                x = block(x, mask=mask)
                 loss = None
                 
         if self.cov:
@@ -86,6 +88,8 @@ class SpaEncoder(nn.Module):
                  activation='swish',
                  prenorm=False,
                  cov=True,
+                 use_flash_attn=True,
+                 use_alibi=True,
                  moe=True, 
                  dropout=0.1,
                  noisy_gating=True, 
@@ -120,6 +124,8 @@ class SpaEncoder(nn.Module):
                                         activation,
                                         prenorm,
                                         cov,
+                                        use_flash_attn,
+                                        use_alibi,
                                         moe, 
                                         dropout,
                                         noisy_gating, 
@@ -139,6 +145,8 @@ class SpaEncoder(nn.Module):
                                        drop_path, 
                                        activation, 
                                        prenorm, 
+                                       use_flash_attn,
+                                       use_alibi,
                                        moe, 
                                        dropout, 
                                        noisy_gating, 
@@ -157,12 +165,11 @@ class SpaEncoder(nn.Module):
         x = self.norm(x)
         # Apply the learned weight to the bpp matrix
         # bias = None
-        alibi_bias = get_alibi(x.size(1), self.num_heads).to(dtype=x.dtype, device=x.device).repeat(x.size(0), 1, 1, 1)
         #Supervised learning
         if self.moe:
-            motif_output, loss = self.projector_layer(x, mask=mask, alibi_bias=alibi_bias)
+            motif_output, loss = self.projector_layer(x, mask=mask)
         else:
-            motif_output = self.projector_layer(x, mask=mask, alibi_bias=alibi_bias)
+            motif_output = self.projector_layer(x, mask=mask)
             loss = None
         #project the motif to normal space
         x = self.projector_back(motif_output)
@@ -173,7 +180,7 @@ class SpaEncoder(nn.Module):
         losses = []
         
         for layer in self.layers:
-            x,loss = layer(x, mask=mask, alibi_bias=alibi_bias)
+            x,loss = layer(x, mask=mask)
             attn_score = layer.get_attn()
             if mask is not None and hasattr(layer, 'compute_mask'):
                 mask = layer.compute_mask(x, mask)
@@ -186,10 +193,10 @@ class SpaEncoder(nn.Module):
     
     
 if __name__ == '__main__':
-    model = SpaEncoder(dim=256, cov=False)
-    x = torch.randn(2, 100, 256)
+    model = SpaEncoder(dim=256, cov=False, use_alibi=True, use_flash_attn=True)
     import pdb; pdb.set_trace()
-    summary(model, input_size = (100, 256))
+    x = torch.randn(2, 100, 256).to(Settings.dtype)
+    # summary(model, input_size = (100, 256))
     
     mask = torch.ones(2, 100, dtype=torch.bool)
     motif_matrix = torch.randn(2, 100, 286)#this is the motif matrix of the input

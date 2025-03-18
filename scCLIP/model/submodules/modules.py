@@ -9,8 +9,11 @@ from scCLIP.model.submodules.layer_modules import DropPath, ScaleBiasLayer
 from scCLIP.model.submodules.masked_batchnorm import MaskedBatchNorm1d
 from scCLIP.model.submodules.masked_conv import MaskedConv1d
 from scCLIP.model.submodules.moe import MoE
+from scCLIP.model.submodules.alibi import get_alibi
 from scCLIP.model.submodules.activations import get_act_fn
-
+from scCLIP.model.settings import Settings
+from scCLIP.model.submodules.flash_attention2 import MHA as FlashMHA
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class GLU(nn.Module):
     def __init__(self, dim: int, activation: str = 'sigmoid') -> None:
@@ -99,9 +102,11 @@ class MaskedSoftmax(nn.Module):
 
     
 class AltAttention(nn.Module):
-    def __init__(self, dim=256, num_heads=4, dropout=0, **kwargs):
+    def __init__(self, dim=256, num_heads=4, dropout=0, use_alibi=True, **kwargs):
         super().__init__(**kwargs)
         self.dim = dim
+        # self.alibi_bias = get_alibi(x.size(1), num_heads).to(dtype=x.dtype, device=x.device).repeat(x.size(0), 1, 1, 1)
+        self.use_alibi = use_alibi
         self.attn_score = None
         self.scale = self.dim ** -0.5
         self.num_heads = num_heads
@@ -110,7 +115,7 @@ class AltAttention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=True)
         # self.proj_drop = nn.Dropout(dropout)
 
-    def forward(self, inputs, mask=None, alibi_bias=None):
+    def forward(self, inputs, mask=None):
         # import pdb; pdb.set_trace()
         qkv = self.qkv(inputs)# B x L X D -> B x L X 3D
         qkv = qkv.view(-1, inputs.shape[1], self.num_heads, self.dim * 3 // self.num_heads).permute(0, 2, 1, 3) # B X H X L X 3D/H
@@ -123,7 +128,9 @@ class AltAttention(nn.Module):
         attn = torch.matmul(q, k.permute(0, 1, 3, 2)) * self.scale
         
         #attention score add with bias
-        if alibi_bias is not None:
+        if self.use_alibi:
+            import pdb; pdb.set_trace()
+            alibi_bias = get_alibi(inputs.size(1), self.num_heads).to(dtype=inputs.dtype, device=inputs.device).repeat(inputs.size(0), 1, 1, 1)
             attn = attn.type_as(alibi_bias)
             attn += alibi_bias
         # import pdb; pdb.set_trace()
@@ -149,6 +156,8 @@ class AltBlock(nn.Module):
                  drop_path=0., 
                  activation='gelu', 
                  prenorm=True, 
+                 use_flash_attn=False,
+                 use_alibi=True,
                  moe=True, 
                  dropout=0.1,
                  noisy_gating=True, 
@@ -165,9 +174,23 @@ class AltBlock(nn.Module):
         '''
         super().__init__(**kwargs)
         self.moe = moe
+        self.use_flash_attn = use_flash_attn
         self.moe_layer = MoE(dropout,activation,noisy_gating,num_experts,moe_input_size,moe_output_size,moe_hidden_size,moe_k)
         self.norm1 = nn.LayerNorm(dim)#MaskedBatchNorm1d(dim, momentum=0.05, channels_last=True)
-        self.self_attn = AltAttention(dim=dim,num_heads=num_heads,dropout=attn_dropout)
+        self.dtype = self.norm1.weight.dtype
+        #define different types of attention mechanism; whether to use gpu effective attention or normal attention
+        if use_flash_attn:
+            self.self_attn = FlashMHA(embed_dim=dim,
+                                      num_heads=num_heads,
+                                      use_flash_attn=use_flash_attn,
+                                      dropout=attn_dropout,
+                                      use_alibi=use_alibi,
+                                      device=device,
+                                      dtype=Settings.dtype,
+                                      )
+           
+        else:    
+            self.self_attn = AltAttention(dim=dim,use_alibi=use_alibi,num_heads=num_heads,dropout=attn_dropout)
         self.drop1 = DropPath(drop_path)
 
         self.norm2 = nn.LayerNorm(dim)#MaskedBatchNorm1d(dim, momentum=0.05, channels_last=True)
@@ -178,12 +201,15 @@ class AltBlock(nn.Module):
         self.attn_scale = ScaleBiasLayer(dim, adaptive_scale=True)
         self.mlp_scale = ScaleBiasLayer(dim, adaptive_scale=True)
         
-    def forward(self, inputs, mask=None, alibi_bias=None):
+    def forward(self, inputs, mask=None):
         x = inputs
         if self.prenorm:
             x = self.norm1(x)
-        # import pdb; pdb.set_trace()
-        x = self.self_attn(x,mask=mask,alibi_bias=alibi_bias)
+        import pdb; pdb.set_trace()
+        if self.use_flash_attn:
+            x = self.self_attn(x)
+        else:
+            x = self.self_attn(x,mask=mask)
         x = self.drop1(x)
         x = self.attn_scale(x)
         x = x + inputs
@@ -283,3 +309,4 @@ class Conv1DBlock(nn.Module):
         if not self.prenorm:
             x = self.norm2(x)
         return x
+    

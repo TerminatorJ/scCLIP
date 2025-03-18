@@ -3,7 +3,9 @@ import torch.nn as nn
 from scCLIP.model.submodules.modules import AltAttention, GLUMlp
 from scCLIP.model.submodules.moe import MoE
 from scCLIP.model.submodules.layer_modules import DropPath, ScaleBiasLayer
-
+from scCLIP.model.submodules.flash_attention2 import MHA as FlashMHA
+from scCLIP.model.settings import Settings
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class PjBlock(nn.Module):
     def __init__(self, 
@@ -16,6 +18,8 @@ class PjBlock(nn.Module):
                  drop_path=0., 
                  activation='gelu', 
                  prenorm=True, 
+                 use_flash_attn=False,
+                 use_alibi=False,
                  moe=True, 
                  dropout=0.1,
                  noisy_gating=True, 
@@ -33,9 +37,22 @@ class PjBlock(nn.Module):
         '''
         super().__init__(**kwargs)
         self.moe = moe
+        self.use_flash_attn = use_flash_attn
         self.moe_layer = MoE(dropout,activation,noisy_gating,num_experts,moe_input_size,moe_output_size,moe_hidden_size,moe_k)
         self.norm1 = nn.LayerNorm(dim)#MaskedBatchNorm1d(dim, momentum=0.05, channels_last=True)
-        self.self_attn = AltAttention(dim=dim,num_heads=num_heads,dropout=attn_dropout)
+        if self.use_flash_attn:
+            self.self_attn = FlashMHA(embed_dim=dim,
+                                      num_heads=num_heads,
+                                      use_flash_attn=use_flash_attn,
+                                      dropout=attn_dropout,
+                                      use_alibi=use_alibi,
+                                      device=device,
+                                      dtype=Settings.dtype,
+                                      )
+        else:
+            self.self_attn = AltAttention(dim=dim,num_heads=num_heads,dropout=attn_dropout)
+
+            
         self.drop1 = DropPath(drop_path)
 
         self.norm2 = nn.LayerNorm(dim)#MaskedBatchNorm1d(dim, momentum=0.05, channels_last=True)
@@ -50,12 +67,15 @@ class PjBlock(nn.Module):
         self.proj_head = nn.Linear(dim, motif_dim, bias=True)
         
         
-    def forward(self, inputs, mask=None, alibi_bias=None):
+    def forward(self, inputs, mask=None):
         x = inputs
         if self.prenorm:
             x = self.norm1(x)
-        # import pdb; pdb.set_trace()
-        x = self.self_attn(x,mask=mask,alibi_bias=alibi_bias)
+        import pdb; pdb.set_trace()
+        if self.use_flash_attn:
+            x = self.self_attn(x)
+        else:
+            x = self.self_attn(x,mask=mask)
         x = self.drop1(x)
         x = self.attn_scale(x)
         x = x + inputs
