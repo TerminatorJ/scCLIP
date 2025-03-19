@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import torch.distributions as dist
 import numpy as np
 from scCLIP.model.submodules.activations import get_act_fn
+from scCLIP.model.settings import Settings
 
 
 class MLP(nn.Module):
@@ -80,7 +81,8 @@ class SparseDispatcher(object):
         # get according batch index for each expert
         self._batch_index = sorted_experts[index_sorted_experts[:, 1],0]
         # calculate num samples that each expert gets
-        self._part_sizes = list((gates > 0).sum(0).numpy())
+        
+        self._part_sizes = torch.cat([(gates > 0).sum(0)]).tolist()
         # expand gates to match with self._batch_index
         gates_exp = gates[self._batch_index.flatten()]
         self._nonzero_gates = torch.gather(gates_exp, 1, self._expert_index) #the non-zero gates for each expert, from expert 0 to n
@@ -120,7 +122,7 @@ class SparseDispatcher(object):
 
         if multiply_by_gates:
             stitched = stitched.mul(self._nonzero_gates)
-        zeros = torch.zeros(self._gates.size(0), expert_out[-1].size(1), requires_grad=True)
+        zeros = torch.zeros(self._gates.size(0), expert_out[-1].size(1), requires_grad=True).to(Settings.device)
         # combine samples that have been processed by the same k experts
         combined = zeros.index_add(0, self._batch_index, stitched.float())
         # add eps to all zero values in order to avoid nans when going back to log space
@@ -179,7 +181,7 @@ class MoE(nn.Module):
         self.softplus = nn.Softplus()
         self.softmax = nn.Softmax(1)
         
-        self.normal = dist.Normal(torch.tensor([0.0]), torch.tensor([1.0])) #normal distribution
+        self.normal = dist.Normal(torch.tensor([0.0], device = Settings.device), torch.tensor([1.0], device = Settings.device)) #normal distribution
 
         assert(self.k <= self.num_experts) #the experts should be more than k, k is the top k experts to be used
 
@@ -229,10 +231,15 @@ class MoE(nn.Module):
         a `Tensor` of shape [batch, n].
         """
         # import pdb; pdb.set_trace()
+        noisy_top_values = noisy_top_values.to(Settings.device)
+        clean_values = clean_values.to(Settings.device)
+        noisy_values = noisy_values.to(Settings.device)
+        noise_stddev = noise_stddev.to(Settings.device)
         batch = clean_values.size(0)
         m = noisy_top_values.size(1) #m >= k+1, 
         top_values_flat = noisy_top_values.flatten()
         threshold_positions_if_in = torch.arange(batch) * m + self.k
+        threshold_positions_if_in = threshold_positions_if_in.to(Settings.device)
         threshold_if_in = torch.unsqueeze(torch.gather(top_values_flat, 0, threshold_positions_if_in), 1)
         is_in = torch.gt(noisy_values, threshold_if_in)
         threshold_positions_if_out = threshold_positions_if_in - 1

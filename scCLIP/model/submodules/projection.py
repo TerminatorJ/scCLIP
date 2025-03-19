@@ -5,7 +5,6 @@ from scCLIP.model.submodules.moe import MoE
 from scCLIP.model.submodules.layer_modules import DropPath, ScaleBiasLayer
 from scCLIP.model.submodules.flash_attention2 import MHA as FlashMHA
 from scCLIP.model.settings import Settings
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class PjBlock(nn.Module):
     def __init__(self, 
@@ -46,7 +45,7 @@ class PjBlock(nn.Module):
                                       use_flash_attn=use_flash_attn,
                                       dropout=attn_dropout,
                                       use_alibi=use_alibi,
-                                      device=device,
+                                      device=Settings.device,
                                       dtype=Settings.dtype,
                                       )
         else:
@@ -71,7 +70,6 @@ class PjBlock(nn.Module):
         x = inputs
         if self.prenorm:
             x = self.norm1(x)
-        import pdb; pdb.set_trace()
         if self.use_flash_attn:
             x = self.self_attn(x)
         else:
@@ -91,6 +89,8 @@ class PjBlock(nn.Module):
             x = self.mlp_scale(x)
             x = x + attn_out
             if not self.prenorm:
+                
+                x = x.to(Settings.dtype)
                 x = self.norm2(x)
                 
             x = self.proj_head(x)

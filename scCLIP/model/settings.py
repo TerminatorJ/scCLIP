@@ -5,3 +5,4 @@ from dataclasses import dataclass
 class Settings:
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     dtype: torch.dtype = torch.bfloat16
+    batch_size: int = 4

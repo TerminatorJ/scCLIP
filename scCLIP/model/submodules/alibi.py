@@ -108,3 +108,7 @@ def get_alibi_bias(
     b = buffered[:target_size, :time_steps, :time_steps]
     b = b.view(batch_size, heads, time_steps, time_steps)
     return b
+
+if __name__ == "__main__":
+    import pdb; pdb.set_trace()
+    bias = get_alibi(1000,4,1,"manhattan")

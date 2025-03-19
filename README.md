@@ -34,7 +34,7 @@ nvcc --version
 ```
 When compilation is ready, let's install the flash-attention  
 
-To get started with the triton backend for AMD, follow the steps below.
+To get started with the triton backend for **AMD**, follow the steps below.
 ```bash
 pip install triton
 ```

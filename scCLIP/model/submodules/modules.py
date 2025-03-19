@@ -13,7 +13,6 @@ from scCLIP.model.submodules.alibi import get_alibi
 from scCLIP.model.submodules.activations import get_act_fn
 from scCLIP.model.settings import Settings
 from scCLIP.model.submodules.flash_attention2 import MHA as FlashMHA
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class GLU(nn.Module):
     def __init__(self, dim: int, activation: str = 'sigmoid') -> None:
@@ -96,7 +95,7 @@ class MaskedSoftmax(nn.Module):
             # Since we are adding it to the raw scores before the softmax, this
             # is effectively the same as removing these entirely.
             # inputs += adder
-            # import pdb; pdb.set_trace()
+            mask = mask.to(Settings.device)
             inputs = inputs.masked_fill(~mask, torch.finfo(inputs.dtype).min)
         return F.softmax(inputs, dim=self.dim)#, dtype=torch.float32)
 
@@ -129,7 +128,6 @@ class AltAttention(nn.Module):
         
         #attention score add with bias
         if self.use_alibi:
-            import pdb; pdb.set_trace()
             alibi_bias = get_alibi(inputs.size(1), self.num_heads).to(dtype=inputs.dtype, device=inputs.device).repeat(inputs.size(0), 1, 1, 1)
             attn = attn.type_as(alibi_bias)
             attn += alibi_bias
@@ -157,7 +155,7 @@ class AltBlock(nn.Module):
                  activation='gelu', 
                  prenorm=True, 
                  use_flash_attn=False,
-                 use_alibi=True,
+                 use_alibi=False,
                  moe=True, 
                  dropout=0.1,
                  noisy_gating=True, 
@@ -180,12 +178,13 @@ class AltBlock(nn.Module):
         self.dtype = self.norm1.weight.dtype
         #define different types of attention mechanism; whether to use gpu effective attention or normal attention
         if use_flash_attn:
+            # import pdb; pdb.set_trace()
             self.self_attn = FlashMHA(embed_dim=dim,
                                       num_heads=num_heads,
                                       use_flash_attn=use_flash_attn,
                                       dropout=attn_dropout,
                                       use_alibi=use_alibi,
-                                      device=device,
+                                      device=Settings.device,
                                       dtype=Settings.dtype,
                                       )
            
@@ -205,7 +204,7 @@ class AltBlock(nn.Module):
         x = inputs
         if self.prenorm:
             x = self.norm1(x)
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         if self.use_flash_attn:
             x = self.self_attn(x)
         else:
@@ -225,6 +224,7 @@ class AltBlock(nn.Module):
             x = self.mlp_scale(x)
             x = x + attn_out
             if not self.prenorm:
+                x = x.to(Settings.dtype)
                 x = self.norm2(x)
             return x, loss
         else:

@@ -6,7 +6,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
-
+from scCLIP.model.settings import Settings
 from flash_attn.utils.distributed import get_dim_for_local_rank
 
 try:
@@ -111,7 +111,7 @@ class FlashSelfAttention(nn.Module):
                 qkv,
                 cu_seqlens,
                 max_seqlen,
-                self.drop.p if self.training else 0.0,
+                0.0,
                 softmax_scale=self.softmax_scale,
                 causal=causal,
                 alibi_slopes=self.alibi_slopes,
@@ -121,7 +121,7 @@ class FlashSelfAttention(nn.Module):
         else:
             return flash_attn_qkvpacked_func(
                 qkv,
-                self.drop.p if self.training else 0.0,
+                0.0,
                 softmax_scale=self.softmax_scale,
                 causal=causal,
                 alibi_slopes=self.alibi_slopes,
@@ -425,7 +425,9 @@ class MHA(nn.Module):
         self.checkpointing = checkpointing
         if use_alibi:
             assert use_flash_attn, "ALiBi code path requires flash_attn"
-            alibi_slopes = torch.tensor(get_alibi_slopes(num_heads), device=device)
+            alibi_slopes = torch.tensor(get_alibi_slopes(num_heads), device=device).unsqueeze(0)
+            alibi_slopes = alibi_slopes.repeat(Settings.batch_size, 1)
+            
         else:
             alibi_slopes = None
         if window_size != (-1, -1):

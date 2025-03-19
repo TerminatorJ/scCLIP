@@ -6,6 +6,10 @@ import os
 from pathlib import Path
 from scCLIP.model.submodules import Conv1DBlock,  AltBlock, MaskedConv2d, MoE, PjBlock
 from scCLIP.model.settings import Settings
+import torchinfo
+from torchsummary import summary
+
+os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "True"
 
 
 class SqueezeformerBlock(nn.Module):
@@ -20,14 +24,14 @@ class SqueezeformerBlock(nn.Module):
                  num_attn_block=1,
                  num_moe_block=1,
                  conv_dropout=0.1,
-                 attn_dropout=0.1,
+                 attn_dropout=0,
                  mlp_dropout=0.1,
                  drop_path=0.1,
                  activation='swish',
                  prenorm=True,
                  cov=True,
                  use_flash_attn=False,
-                 use_alibi=True,
+                 use_alibi=False,
                  moe=True, 
                  dropout=0.1,
                  noisy_gating=True, 
@@ -43,7 +47,7 @@ class SqueezeformerBlock(nn.Module):
         self.moe = moe
         self.cov = cov
         self.conv_blocks = nn.ModuleList([Conv1DBlock(dim,kernel_size,groups,1,1,conv_dropout,mlp_dropout,drop_path,conv_expand,activation,prenorm) for _ in range(num_conv_block)])
-        self.attn_blocks = nn.ModuleList([AltBlock(dim,num_heads,attn_expand,attn_dropout,mlp_dropout,drop_path,activation,prenorm,moe,use_flash_attn,use_alibi,dropout,noisy_gating,num_experts,moe_input_size,moe_output_size,moe_hidden_size,moe_k) for _ in range(num_attn_block)])
+        self.attn_blocks = nn.ModuleList([AltBlock(dim,num_heads,attn_expand,attn_dropout,mlp_dropout,drop_path,activation,prenorm,use_flash_attn,use_alibi,moe,dropout,noisy_gating,num_experts,moe_input_size,moe_output_size,moe_hidden_size,moe_k) for _ in range(num_attn_block)])
 
     def forward(self, inputs, mask=None):
         x = inputs #(B,N,C)
@@ -64,7 +68,10 @@ class SqueezeformerBlock(nn.Module):
     def get_attn(self):
         for block in self.attn_blocks:
             # import pdb; pdb.set_trace()
-            attns = block.self_attn.attn_score
+            try:
+                attns = block.self_attn.attn_score
+            except AttributeError:
+                attns = None
         return attns
 
         
@@ -193,17 +200,15 @@ class SpaEncoder(nn.Module):
     
     
 if __name__ == '__main__':
-    model = SpaEncoder(dim=256, cov=False, use_alibi=True, use_flash_attn=True)
-    import pdb; pdb.set_trace()
-    x = torch.randn(2, 100, 256).to(Settings.dtype)
+    model = SpaEncoder(dim=256, cov=False, use_alibi=True, use_flash_attn=True, attn_dropout=0).to(Settings.device).to(Settings.dtype)
+    x = torch.randn(4, 100, 256).to(Settings.dtype).to(Settings.device)
     # summary(model, input_size = (100, 256))
     
-    mask = torch.ones(2, 100, dtype=torch.bool)
-    motif_matrix = torch.randn(2, 100, 286)#this is the motif matrix of the input
+    mask = torch.ones(4, 100, dtype=torch.bool)
+    motif_matrix = torch.randn(4, 100, 286)#this is the motif matrix of the input
     motif_output, outputs, attn_scores, losses = model(x, mask=mask)
+    #summarize the model
+    torchinfo.summary(model, (4, 100, 256), col_names=("input_size", "output_size", "num_params", "kernel_size", "mult_adds"), verbose=1, dtypes=[Settings.dtype], depth=7)
+    
+    
     import pdb; pdb.set_trace()
-    print(model)
-    #visualize the model
-    make_dot(motif_output, params=dict(model.named_parameters())).render("model_architecture", format="png")
-    import pdb; pdb.set_trace()
-
